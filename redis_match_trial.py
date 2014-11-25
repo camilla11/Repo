@@ -4,6 +4,7 @@ import redis
 import time
 import thread
 from threading import Thread
+from multiprocessing import Process
 import subprocess
 
 def main():
@@ -36,7 +37,7 @@ def main():
 		array_of_rates = r.mget(numbertofind, numbertofind[:-1], numbertofind[:-2], numbertofind[:-3],
 				numbertofind[:-4], numbertofind[:-5], numbertofind[:-6], numbertofind[:-7])
 		while array_of_rates and None in array_of_rates: 
-			#linear, at most 7 times per array 		
+			#compared to redis access, getting longest match is taking the most time		
 			array_of_rates.remove(None)	
 		if not array_of_rates:
 			# set as default rate
@@ -57,7 +58,7 @@ def main():
 		dict_of_rates = r.hgetall(numbertofind[0:3])
 		newnumbertofind = numbertofind
 		while dict_of_rates and newnumbertofind and newnumbertofind not in dict_of_rates: 
-			#linear, at most 7 times per array 		
+			#compared to redis access, getting longest match is taking the most time		
 			newnumbertofind = newnumbertofind[:-1]
 		if not newnumbertofind or not dict_of_rates:
 			# set as default rate
@@ -71,14 +72,21 @@ def main():
 	# After this , how to take advantage of redis parallelism? what is redis parallelism?
 	# each redis server is single threaded so if i want to run parallel mgets i need to 
 	# have multiple servers - however I can run multiple clients on one server, it just 
-	# queues up the requests? is this faster?
+	# queues up the requests? Since the actual longest match takes much more time than the redis
+	# access - create parallelism for the matching 
 	startglobal = time.clock()
-	t1 = Thread(target=match, args=(data, r, 0, len(data)/2))
+	'''t1 = Thread(target=match, args=(data, r, 0, len(data)/2))
 	t2 = Thread(target=match, args=(data, r, len(data)/2, len(data)))	
 	t1.start()
 	t2.start()
 	t1.join()
-	t2.join()	
+	t2.join()''' #This has GIL problem - use real multiprocessing
+	p1 = Process(target=match, args=(data, r, 0, len(data)/2))
+	p2 = Process(target=match, args=(data, r, len(data)/2, len(data)))
+	p1.start()
+	p2.start()
+	p1.join()
+	p2.join()
 	print "Total time of two threads:", time.clock() - startglobal
 	
 	data_file.close()	
@@ -89,11 +97,11 @@ def match(data, r, startindex, finishindex):
 	for number in data[int(startindex):int(finishindex)]:
 		#so many iterations.. 
 		numbertofind = number.keys()[0]
-		#mget reduces latency
+		#hgetall reduces latency
 		dict_of_rates = r.hgetall(numbertofind[0:3])
 		newnumbertofind = numbertofind
 		while dict_of_rates and newnumbertofind and newnumbertofind not in dict_of_rates: 
-			#linear, at most 7 times per array 		
+			#compared to redis access, getting longest match is taking the most time		
 			newnumbertofind = newnumbertofind[:-1]
 		if not newnumbertofind or not dict_of_rates:
 			# set as default rate
